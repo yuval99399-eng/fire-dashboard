@@ -3,13 +3,13 @@ import pandas as pd
 import plotly.express as px
 import requests
 import io
+import reverse_geocoder as rg # הספרייה החדשה לזיהוי מדינות
 
 # --- 1. הגדרות עמוד ---
 st.set_page_config(page_title="Yuval Fire Analytics", layout="wide", page_icon="🔥")
 
-# כותרת ראשית כפי שביקשת
 st.title("🔥 Yuval ft. Nasa Fire Analysis")
-st.markdown("Real-time monitoring of global thermal anomalies.")
+st.markdown("Advanced intelligence dashboard for monitoring global thermal anomalies.")
 
 # --- 2. הגדרות API ---
 # ==========================================
@@ -33,108 +33,134 @@ def load_data():
     except Exception as e:
         return pd.DataFrame()
 
-# טעינת הנתונים
-with st.spinner('Fetching data from NASA satellites...'):
-    df = load_data()
+# פונקציה לחישוב ציון סיכון וזיהוי מדינות
+@st.cache_data(ttl=600)
+def enrich_data(df):
+    if df.empty: return df
+    
+    # 1. חישוב Threat Score
+    # הנוסחה: עוצמה * פקטור ביטחון (Low=1, Nominal=1.2, High=1.5)
+    confidence_map = {'l': 1.0, 'n': 1.2, 'h': 1.5}
+    df['risk_factor'] = df['confidence'].map(confidence_map).fillna(1.0)
+    df['threat_score'] = df['frp'] * df['risk_factor']
+    
+    # 2. זיהוי מדינות (Reverse Geocoding)
+    coordinates = list(zip(df['latitude'], df['longitude']))
+    results = rg.search(coordinates) # פעולה כבדה, לכן היא בתוך cache
+    df['country_code'] = [x['cc'] for x in results]
+    
+    return df
+
+# טעינת ועיבוד הנתונים
+with st.spinner('Connecting to Satellite & Calculating Risk Scores...'):
+    raw_df = load_data()
+    df = enrich_data(raw_df)
 
 if not df.empty:
-    # עיבוד זמן: יצירת עמודת 'שעה' כמספר שלם לטובת הסינון
-    # acq_time מגיע כ- 130 (עבור 01:30) או 1400 (עבור 14:00)
-    # אנו לוקחים את שתי הספרות הראשונות
+    # הכנת נתוני זמן
     df['hour'] = df['acq_time'].apply(lambda x: int(f"{x:04d}"[:2]))
-    df['hour_str'] = df['hour'].apply(lambda x: f"{x:02d}") # לגרף
+    df['hour_str'] = df['hour'].apply(lambda x: f"{x:02d}:00") # לגרף
     
-    # --- 3. סרגל צד (Sidebar Filters) ---
-    st.sidebar.header("🛠️ Filter Settings")
+    # --- 3. סרגל צד (Filters) ---
+    st.sidebar.header("🛠️ Mission Control Filters")
     
-    # פילטר 1: טווח שעות (חדש!)
-    min_hour, max_hour = st.sidebar.slider(
-        "Filter by Hour (UTC)",
-        min_value=0,
-        max_value=23,
-        value=(0, 23) # ברירת מחדל: כל היום
-    )
-
-    # פילטר 2: עוצמה
-    min_frp = st.sidebar.slider(
-        "Minimum Fire Intensity (MW)", 
-        min_value=0.0, 
-        max_value=float(df['frp'].max()), 
-        value=0.0,
-        step=0.5
-    )
+    # פילטר שעות
+    min_hour, max_hour = st.sidebar.slider("Operation Time (UTC)", 0, 23, (0, 23))
     
-    # פילטר 3: יום/לילה
-    day_night = st.sidebar.multiselect(
-        "Time of Detection",
-        options=['D', 'N'],
-        default=['D', 'N'],
-        format_func=lambda x: "Day" if x == 'D' else "Night"
-    )
+    # פילטר עוצמה
+    min_frp = st.sidebar.slider("Min Intensity (MW)", 0.0, float(df['frp'].max()), 0.0)
     
-    # ביצוע הסינון בפועל (כולל שעות)
+    # פילטר מדינות (חדש!)
+    all_countries = sorted(df['country_code'].unique())
+    selected_countries = st.sidebar.multiselect("Select Countries", all_countries, default=all_countries)
+    
+    # ביצוע הסינון
     filtered_df = df[
         (df['frp'] >= min_frp) & 
-        (df['daynight'].isin(day_night)) &
         (df['hour'] >= min_hour) & 
-        (df['hour'] <= max_hour)
+        (df['hour'] <= max_hour) &
+        (df['country_code'].isin(selected_countries))
     ]
     
-    # הצגת סטטוס בצד
     st.sidebar.markdown("---")
-    st.sidebar.write(f"Showing **{len(filtered_df)}** fires out of {len(df)}")
+    st.sidebar.write(f"Targets Identified: **{len(filtered_df)}**")
+    
+    # כפתור הורדת דוח (רעיון מס' 4)
+    csv = filtered_df.to_csv(index=False).encode('utf-8')
+    st.sidebar.download_button(
+        "📥 Download Intel Report",
+        data=csv,
+        file_name="fire_intel_report.csv",
+        mime="text/csv"
+    )
 
-    # --- 4. מדדים (KPIs) ---
-    # הורדנו את הממוצע, נשארנו עם 3 עמודות נקיות
-    col1, col2, col3 = st.columns(3)
+    # --- 4. טבלת איומים (רעיון מס' 1 - Threat Score) ---
+    st.subheader("🚨 Top 5 Critical Threats")
+    # מיון לפי הציון החדש שלנו
+    top_threats = filtered_df.sort_values('threat_score', ascending=False).head(5)
     
-    col1.metric("Active Fires", f"{len(filtered_df):,}")
-    
-    max_frp = filtered_df['frp'].max() if not filtered_df.empty else 0
-    col2.metric("Max Intensity", f"{max_frp:.2f} MW")
-    
-    high_conf = len(filtered_df[filtered_df['confidence'] == 'h'])
-    col3.metric("High Confidence Alerts", f"{high_conf}")
+    # יצירת טבלה יפה
+    display_cols = ['latitude', 'longitude', 'country_code', 'frp', 'confidence', 'threat_score']
+    st.dataframe(
+        top_threats[display_cols].style.background_gradient(subset=['threat_score'], cmap='Reds'),
+        use_container_width=True
+    )
 
-    st.markdown("---")
-
-    # --- 5. המפה (Density Heatmap) ---
-    st.subheader("🌍 Global Fire Density")
+    # --- 5. מפה עם אנימציה (רעיון מס' 3) ---
+    st.subheader("🌍 Time-Lapse Operation Map")
+    st.markdown("Press the **Play** button below to visualize fire progression over the last 24h.")
     
-    if not filtered_df.empty:
-        fig_map = px.density_mapbox(
-            filtered_df, 
-            lat='latitude', 
-            lon='longitude', 
-            z='frp', 
-            radius=10,
-            center=dict(lat=20, lon=0), 
-            zoom=1,
-            mapbox_style="carto-darkmatter",
-            height=600 # הגדלתי קצת את הגובה שיהיה מרשים
+    # אנחנו צריכים למיין את הדאטה לפי שעות כדי שהאנימציה תרוץ נכון
+    anim_df = filtered_df.sort_values('hour')
+    
+    fig_map = px.scatter_mapbox(
+        anim_df,
+        lat="latitude", 
+        lon="longitude",
+        color="frp", 
+        size="frp",
+        hover_name="country_code",
+        animation_frame="hour_str", # זה הקסם שיוצר את הנגן
+        color_continuous_scale=px.colors.cyclical.IceFire,
+        size_max=30, 
+        zoom=1,
+        mapbox_style="carto-darkmatter",
+        title="Global Fire Progression"
+    )
+    st.plotly_chart(fig_map, use_container_width=True)
+
+    # --- 6. ניתוח גיאוגרפי (רעיון מס' 2 - Pie Chart) ---
+    col_graph1, col_graph2 = st.columns(2)
+    
+    with col_graph1:
+        st.subheader("🏳️ Impact by Country")
+        # סופרים כמה שריפות בכל מדינה
+        country_counts = filtered_df['country_code'].value_counts().reset_index()
+        country_counts.columns = ['Country', 'Count']
+        
+        # מציגים רק את הטופ 10 כדי שהגרף לא יתפוצץ
+        top_countries = country_counts.head(10)
+        
+        fig_pie = px.pie(
+            top_countries, 
+            values='Count', 
+            names='Country', 
+            title='Top 10 Affected Countries',
+            hole=0.4 # הופך את זה ל-Donut Chart מודרני
         )
-        st.plotly_chart(fig_map, use_container_width=True)
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- 6. גרף השעות (עכשיו ברוחב מלא) ---
-    st.subheader("🕒 Peak Fire Hours (UTC)")
-    
-    if not filtered_df.empty:
+    with col_graph2:
+        st.subheader("🕒 Timeline Analysis")
+        # גרף השעות הרגיל והטוב
         hourly_counts = filtered_df['hour_str'].value_counts().reset_index().sort_values('hour_str')
         hourly_counts.columns = ['Hour', 'Count']
         
         fig_bar = px.bar(
-            hourly_counts, 
-            x='Hour', 
-            y='Count',
-            color='Count',
-            color_continuous_scale='Oranges', # שיניתי לכתום שיתאים לאש
-            text_auto=True # מציג את המספרים על העמודות
+            hourly_counts, x='Hour', y='Count',
+            color='Count', color_continuous_scale='Oranges'
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
-    # --- 7. טבלת נתונים ---
-    with st.expander("📂 View Raw Data Table"):
-        st.dataframe(filtered_df)
-
 else:
-    st.error("No data available. Check your API Key.")
+    st.error("System Offline: Check API Key or Data Connection.")
