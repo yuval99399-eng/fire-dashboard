@@ -4,11 +4,11 @@ import plotly.express as px
 import requests
 import io
 
-# --- 1. הגדרות עמוד ועיצוב ---
-st.set_page_config(page_title="Global Fire Dashboard", layout="wide", page_icon="🔥")
+# --- 1. הגדרות עמוד ---
+st.set_page_config(page_title="Yuval Fire Analytics", layout="wide", page_icon="🔥")
 
-# כותרת ראשית
-st.title("🔥 NASA VIIRS: Global Fire Analysis")
+# כותרת ראשית כפי שביקשת
+st.title("🔥 Yuval ft. Nasa Fire Analysis")
 st.markdown("Real-time monitoring of global thermal anomalies.")
 
 # --- 2. הגדרות API ---
@@ -38,13 +38,24 @@ with st.spinner('Fetching data from NASA satellites...'):
     df = load_data()
 
 if not df.empty:
-    # עיבוד זמן
-    df['hour_str'] = df['acq_time'].apply(lambda x: f"{x:04d}"[:2])
+    # עיבוד זמן: יצירת עמודת 'שעה' כמספר שלם לטובת הסינון
+    # acq_time מגיע כ- 130 (עבור 01:30) או 1400 (עבור 14:00)
+    # אנו לוקחים את שתי הספרות הראשונות
+    df['hour'] = df['acq_time'].apply(lambda x: int(f"{x:04d}"[:2]))
+    df['hour_str'] = df['hour'].apply(lambda x: f"{x:02d}") # לגרף
     
     # --- 3. סרגל צד (Sidebar Filters) ---
     st.sidebar.header("🛠️ Filter Settings")
     
-    # פילטר עוצמה
+    # פילטר 1: טווח שעות (חדש!)
+    min_hour, max_hour = st.sidebar.slider(
+        "Filter by Hour (UTC)",
+        min_value=0,
+        max_value=23,
+        value=(0, 23) # ברירת מחדל: כל היום
+    )
+
+    # פילטר 2: עוצמה
     min_frp = st.sidebar.slider(
         "Minimum Fire Intensity (MW)", 
         min_value=0.0, 
@@ -53,7 +64,7 @@ if not df.empty:
         step=0.5
     )
     
-    # פילטר יום/לילה
+    # פילטר 3: יום/לילה
     day_night = st.sidebar.multiselect(
         "Time of Detection",
         options=['D', 'N'],
@@ -61,85 +72,69 @@ if not df.empty:
         format_func=lambda x: "Day" if x == 'D' else "Night"
     )
     
-    # ביצוע הסינון בפועל
-    filtered_df = df[(df['frp'] >= min_frp) & (df['daynight'].isin(day_night))]
+    # ביצוע הסינון בפועל (כולל שעות)
+    filtered_df = df[
+        (df['frp'] >= min_frp) & 
+        (df['daynight'].isin(day_night)) &
+        (df['hour'] >= min_hour) & 
+        (df['hour'] <= max_hour)
+    ]
     
     # הצגת סטטוס בצד
     st.sidebar.markdown("---")
     st.sidebar.write(f"Showing **{len(filtered_df)}** fires out of {len(df)}")
-    if len(filtered_df) == 0:
-        st.warning("No fires match your filters!")
 
     # --- 4. מדדים (KPIs) ---
-    # נותן תמונת מצב מהירה למנהל
-    col1, col2, col3, col4 = st.columns(4)
+    # הורדנו את הממוצע, נשארנו עם 3 עמודות נקיות
+    col1, col2, col3 = st.columns(3)
+    
     col1.metric("Active Fires", f"{len(filtered_df):,}")
     
-    avg_frp = filtered_df['frp'].mean() if not filtered_df.empty else 0
-    col2.metric("Avg. Intensity", f"{avg_frp:.2f} MW")
-    
     max_frp = filtered_df['frp'].max() if not filtered_df.empty else 0
-    col3.metric("Max Intensity", f"{max_frp:.2f} MW")
+    col2.metric("Max Intensity", f"{max_frp:.2f} MW")
     
     high_conf = len(filtered_df[filtered_df['confidence'] == 'h'])
-    col4.metric("High Confidence Alerts", f"{high_conf}")
+    col3.metric("High Confidence Alerts", f"{high_conf}")
 
-    # --- 5. המפה החדשה: Density Heatmap ---
-    st.subheader("🌍 Fire Density Heatmap")
-    st.markdown("Darker areas indicate higher concentration of intense fires.")
+    st.markdown("---")
+
+    # --- 5. המפה (Density Heatmap) ---
+    st.subheader("🌍 Global Fire Density")
     
     if not filtered_df.empty:
         fig_map = px.density_mapbox(
             filtered_df, 
             lat='latitude', 
             lon='longitude', 
-            z='frp', # הצבע נקבע לפי עוצמת האש!
+            z='frp', 
             radius=10,
             center=dict(lat=20, lon=0), 
             zoom=1,
-            mapbox_style="carto-darkmatter", # עיצוב כהה ומקצועי
-            title="Global Fire Intensity Heatmap"
+            mapbox_style="carto-darkmatter",
+            height=600 # הגדלתי קצת את הגובה שיהיה מרשים
         )
         st.plotly_chart(fig_map, use_container_width=True)
 
-    # --- 6. הגרפים הנוספים ---
-    row2_col1, row2_col2 = st.columns(2)
+    # --- 6. גרף השעות (עכשיו ברוחב מלא) ---
+    st.subheader("🕒 Peak Fire Hours (UTC)")
+    
+    if not filtered_df.empty:
+        hourly_counts = filtered_df['hour_str'].value_counts().reset_index().sort_values('hour_str')
+        hourly_counts.columns = ['Hour', 'Count']
+        
+        fig_bar = px.bar(
+            hourly_counts, 
+            x='Hour', 
+            y='Count',
+            color='Count',
+            color_continuous_scale='Oranges', # שיניתי לכתום שיתאים לאש
+            text_auto=True # מציג את המספרים על העמודות
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-    with row2_col1:
-        st.subheader("🔥 Intensity vs. Latitude")
-        # גרף ה-Scatter שאהבת
-        if not filtered_df.empty:
-            fig_scatter = px.scatter(
-                filtered_df, 
-                x="latitude", 
-                y="frp", 
-                color="confidence",
-                size="frp",
-                hover_data=['longitude'],
-                color_discrete_map={'l': 'yellow', 'n': 'orange', 'h': 'red'},
-                labels={"frp": "Intensity (MW)", "latitude": "Latitude"}
-            )
-            st.plotly_chart(fig_scatter, use_container_width=True)
-
-    with row2_col2:
-        st.subheader("🕒 Peak Fire Hours (UTC)")
-        # גרף השעות (חובה לפי ההוראות)
-        if not filtered_df.empty:
-            hourly_counts = filtered_df['hour_str'].value_counts().reset_index().sort_values('hour_str')
-            hourly_counts.columns = ['Hour', 'Count']
-            
-            fig_bar = px.bar(
-                hourly_counts, 
-                x='Hour', 
-                y='Count',
-                color='Count',
-                color_continuous_scale='Reds'
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
-
-    # --- 7. טבלת נתונים (מוסתרת) ---
+    # --- 7. טבלת נתונים ---
     with st.expander("📂 View Raw Data Table"):
         st.dataframe(filtered_df)
 
 else:
-    st.error("No data available. Check your API Key or try again later.")
+    st.error("No data available. Check your API Key.")
