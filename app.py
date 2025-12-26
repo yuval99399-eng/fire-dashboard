@@ -1,97 +1,164 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import pydeck as pdk
 import requests
 import io
 
-# --- 1. הגדרות עמוד (Page Config) ---
-# מגדיר את כותרת הדפדפן ופריסה רחבה (Wide Layout) כדי שיהיה נוח לדשבורד
-st.set_page_config(page_title="Global Wildfire Dashboard", layout="wide")
+# --- 1. הגדרות עמוד ועיצוב ---
+st.set_page_config(page_title="Advanced Wildfire Dashboard", layout="wide", page_icon="🔥")
 
-# כותרת ראשית ותיאור
-st.title("🔥 Global Wildfire Monitoring System")
-st.markdown("Real-time analysis of fire hotspots detected by NASA VIIRS satellites.")
+# הוספת CSS מותאם אישית להעלמת שוליים מיותרים
+st.markdown("""
+<style>
+    .reportview-container {
+        margin-top: -2em;
+    }
+    .stDeployButton {display:none;}
+    footer {visibility: hidden;}
+    #stDecoration {display:none;}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🔥 NASA VIIRS: Advanced Fire Analytics")
+st.markdown("Interactive dashboard analyzing global thermal anomalies in real-time.")
 
 # --- 2. הגדרות API ---
-# כאן עליך להכניס את המפתח שלך
+# ==========================================
+# אל תשכח להדביק את המפתח שלך כאן!
 MAP_KEY = "a987e692baea378c29f7f6967f66b1cb" 
+# ==========================================
 BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 SOURCE = "VIIRS_SNPP_NRT"
 AREA = "world"
 DAYS = "1"
 
-# --- 3. פונקציית טעינת נתונים (עם Cache) ---
-# השימוש ב-cache_data קריטי: הוא מונע פנייה לנאס"א בכל פעם שאתה לוחץ על כפתור
-# זה משפר ביצועים ומונע חסימה של ה-API
-@st.cache_data(ttl=600) # שומר את המידע ל-10 דקות
-def load_fire_data():
+@st.cache_data(ttl=600)
+def load_data():
     url = f"{BASE_URL}/{MAP_KEY}/{SOURCE}/{AREA}/{DAYS}"
     try:
         response = requests.get(url)
-        response.raise_for_status() # יזרוק שגיאה אם הבקשה נכשלה
-        
-        # קריאת ה-CSV מתוך הטקסט שחזר
+        response.raise_for_status()
         df = pd.read_csv(io.StringIO(response.text))
         return df
     except Exception as e:
-        st.error(f"Error loading data from NASA: {e}")
         return pd.DataFrame()
 
-# טעינת הנתונים בפועל
-with st.spinner('Fetching latest satellite data...'):
-    df = load_fire_data()
+# טעינת נתונים
+with st.spinner('Connecting to NASA satellites...'):
+    df = load_data()
 
-# --- 4. בניית הדשבורד ---
 if not df.empty:
-    
-    # עיבוד מקדים: חילוץ השעה מתוך acq_time
-    # המספר מגיע כ- integer (למשל 130 שזה 01:30, או 1450 שזה 14:50)
-    # אנו ממירים למחרוזת, מוסיפים אפסים בהתחלה ולוקחים את השעתיים הראשונות
+    # עיבוד נתונים
     df['hour_str'] = df['acq_time'].apply(lambda x: f"{x:04d}"[:2])
     
-    # --- שורת מדדים (KPIs) ---
-    # זה הופך את זה ל"דשבורד ניהולי" אמיתי
-    st.markdown("### 📊 Key Metrics (Last 24h)")
-    kpi1, kpi2, kpi3 = st.columns(3)
+    # --- 3. סרגל צד (Sidebar) לפילוח נתונים ---
+    st.sidebar.header("🛠️ Filter Controls")
     
-    total_fires = len(df)
-    max_intensity = df['frp'].max()
-    high_conf_fires = len(df[df['confidence'] == 'h'])
-
-    kpi1.metric("Total Fires Detected", f"{total_fires:,}")
-    kpi2.metric("Max Fire Intensity (FRP)", f"{max_intensity:.2f} MW")
-    kpi3.metric("High Confidence Alerts", f"{high_conf_fires}")
-
-    st.markdown("---")
-
-    # --- ויזואליזציה 1: מפת העולם (סעיף i) ---
-    st.subheader("🌍 Real-Time Fire Map")
-    st.markdown("Geographic distribution of detected hotspots.")
-    # הפקודה st.map מחפשת אוטומטית עמודות בשם lat/lon או latitude/longitude
-    st.map(df, latitude='latitude', longitude='longitude', size=20, color='#ff4b4b')
-
-    # --- ויזואליזציה 2: גרף שעות (סעיף ii) ---
-    st.subheader("🕒 Fire Detections by Hour (UTC)")
+    # פילטר 1: עוצמת אש מינימלית
+    min_frp = st.sidebar.slider("Minimum Fire Intensity (MW)", 
+                                min_value=0.0, 
+                                max_value=float(df['frp'].max()), 
+                                value=0.0,
+                                step=0.5)
     
-    # קיבוץ הנתונים לפי שעה וספירה
-    hourly_counts = df['hour_str'].value_counts().reset_index()
-    hourly_counts.columns = ['Hour (UTC)', 'Count']
-    hourly_counts = hourly_counts.sort_values('Hour (UTC)')
+    # פילטר 2: יום/לילה
+    day_night_filter = st.sidebar.multiselect("Time of Detection", 
+                                              options=['D', 'N'], 
+                                              default=['D', 'N'],
+                                              format_func=lambda x: "Day" if x == 'D' else "Night")
+    
+    # סינון הדאטה לפי הבחירה
+    filtered_df = df[(df['frp'] >= min_frp) & (df['daynight'].isin(day_night_filter))]
+    
+    # הצגת כמות תוצאות אחרי סינון
+    st.sidebar.markdown("---")
+    st.sidebar.write(f"Showing **{len(filtered_df)}** fires out of {len(df)}")
 
-    # יצירת הגרף עם Plotly
-    fig = px.bar(
-        hourly_counts, 
-        x='Hour (UTC)', 
-        y='Count',
-        color='Count',
-        color_continuous_scale='Reds',
-        labels={'Count': 'Number of Fires'}
+    # --- 4. מדדים ראשיים (Top Level Metrics) ---
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Active Fires", f"{len(filtered_df):,}", delta_color="inverse")
+    
+    # חישוב ממוצע עוצמה
+    avg_frp = filtered_df['frp'].mean() if not filtered_df.empty else 0
+    col2.metric("Avg. Intensity", f"{avg_frp:.1f} MW")
+    
+    # השריפה הכי חזקה
+    max_frp = filtered_df['frp'].max() if not filtered_df.empty else 0
+    col3.metric("Max Intensity", f"{max_frp:.1f} MW")
+    
+    # אחוז ביטחון גבוה
+    high_conf = len(filtered_df[filtered_df['confidence'] == 'h'])
+    col4.metric("High Confidence", f"{high_conf}")
+
+    # --- 5. מפה תלת-ממדית (The "Cool" Part) ---
+    st.subheader("🌍 3D Density Map")
+    st.markdown("Hexagon layer showing fire density. Taller columns = More fires in that area.")
+
+    # הגדרת שכבת המפה
+    layer = pdk.Layer(
+        "HexagonLayer",
+        filtered_df,
+        get_position=["longitude", "latitude"],
+        auto_highlight=True,
+        elevation_scale=50,
+        pickable=True,
+        elevation_range=[0, 3000],
+        extruded=True,
+        coverage=1,
     )
-    st.plotly_chart(fig, use_container_width=True)
 
-    # --- הצגת נתונים גולמיים (אופציונלי) ---
-    with st.expander("📂 View Raw Data"):
-        st.dataframe(df)
+    # הגדרת זווית המצלמה (View)
+    view_state = pdk.ViewState(
+        longitude=0,
+        latitude=20,
+        zoom=1.5,
+        min_zoom=1,
+        max_zoom=15,
+        pitch=40.5, # זווית הטיה כדי שיראו תלת מימד
+        bearing=0,
+    )
+
+    # הצגת המפה
+    st.pydeck_chart(pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        tooltip={"text": "Density: {elevationValue}"}
+    ))
+
+    # --- 6. גרפים מתקדמים ---
+    row2_col1, row2_col2 = st.columns(2)
+
+    with row2_col1:
+        st.subheader("🔥 Intensity vs. Latitude")
+        # גרף שמראה איפה השריפות הכי חזקות (קו רוחב)
+        fig_scatter = px.scatter(
+            filtered_df, 
+            x="latitude", 
+            y="frp", 
+            color="confidence",
+            size="frp",
+            hover_data=['longitude'],
+            title="Fire Intensity Distribution by Latitude",
+            labels={"frp": "Fire Radiative Power (MW)", "latitude": "Latitude"}
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+    with row2_col2:
+        st.subheader("🕒 Peak Fire Hours")
+        # גרף שעות משופר
+        hourly_counts = filtered_df['hour_str'].value_counts().reset_index().sort_values('hour_str')
+        hourly_counts.columns = ['Hour', 'Count']
+        
+        fig_bar = px.bar(
+            hourly_counts, 
+            x='Hour', 
+            y='Count',
+            color='Count',
+            color_continuous_scale='Magma', # צבעי אש יפים יותר
+            title="When do fires happen? (UTC Time)"
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
 
 else:
-    st.warning("No data available. Please check your API Key.")
+    st.error("No data available. Please check your API Key.")
