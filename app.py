@@ -52,6 +52,7 @@ def load_data():
         df = pd.read_csv(io.StringIO(response.text))
         return df
     except Exception as e:
+        st.error(f"Error Details: {e}") # <--- השורה הזו תגלה לנו את הסוד
         return pd.DataFrame()
 
 @st.cache_data(ttl=600)
