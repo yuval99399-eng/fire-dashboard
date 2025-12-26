@@ -12,7 +12,7 @@ st.set_page_config(page_title="Yuval Fire Analytics", layout="wide", page_icon="
 st.title("🔥 Yuval ft. Nasa Fire Analysis")
 st.markdown("Advanced intelligence dashboard for monitoring global thermal anomalies.")
 
-# --- 2. הגדרות API ---
+# --- 2. הגדרות API --- 
 # ==========================================
 MAP_KEY = "a987e692baea378c29f7f6967f66b1cb"
 # ==========================================
