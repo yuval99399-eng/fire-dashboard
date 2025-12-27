@@ -2,7 +2,7 @@
 
 # I Hope (!!) you gonna like it and give me the job :) 
 
-###Key Assumptions & Design Philosophy
+Key Assumptions & Design Philosophy
 1. This dashboard was designed with First Responders and Security Forces in mind, serving as a tool for immediate situational awareness and rapid response. Consequently, the system prioritizes real-time data visualization over historical trends.
 
 Alternative approach that as been considered was, A research-oriented tool aimed at long-term fire prevention would have focused differently emphasizing historical data analysis, seasonal trends, and predictive modeling for future forecasting.
