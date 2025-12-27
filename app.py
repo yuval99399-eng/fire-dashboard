@@ -10,7 +10,7 @@ import pycountry_convert as pc
 st.set_page_config(page_title="Yuval Fire Analytics", layout="wide", page_icon="🔥")
 
 st.title("🔥 Yuval ft. Nasa Fire Analysis")
-# Updated Subtitle: Tailored for security forces
+# Subtitle tailored for security forces
 st.markdown("Operational dashboard designed for global security forces: Real-time anomaly detection and strategic analysis.")
 
 # --- 2. API Configuration ---
@@ -102,15 +102,19 @@ if not df.empty:
     csv = filtered_df.to_csv(index=False).encode('utf-8')
     st.sidebar.download_button("📥 Download Intel Report", data=csv, file_name="fire_intel_report.csv", mime="text/csv")
 
-    # --- 1. Interactive Threat Table ---
-    # Updated Header with the Equation
-    st.subheader("🚨 Top 5 Critical Threats (Threat Score = FRP × Confidence Factor)")
+    # --- 1. Interactive Threat Table (Updated) ---
+    st.subheader("🚨 Top 10 Critical Threats (Select to Zoom)")
     
-    top_threats = filtered_df.sort_values('threat_score', ascending=False).head(5)
+    # Select Top 10 instead of 5
+    top_threats = filtered_df.sort_values('threat_score', ascending=False).head(10)
     
-    # Interactive Table Configuration
+    # Create a display-friendly version of the dataframe with renamed columns
+    display_df = top_threats[['latitude', 'longitude', 'continent', 'frp', 'confidence', 'threat_score']].copy()
+    display_df.columns = ['Latitude', 'Longitude', 'Continent', 'FRP (MW)', 'Confidence', 'Threat Score (FRP × Conf Factor)']
+    
+    # Interactive Table Configuration with the new column names
     event = st.dataframe(
-        top_threats[['latitude', 'longitude', 'continent', 'frp', 'confidence', 'threat_score']].style.background_gradient(subset=['threat_score'], cmap='Reds'),
+        display_df.style.background_gradient(subset=['Threat Score (FRP × Conf Factor)'], cmap='Reds'),
         use_container_width=True,
         on_select="rerun",     
         selection_mode="single-row" 
@@ -124,6 +128,7 @@ if not df.empty:
     # Check if a row is selected
     if len(event.selection.rows) > 0:
         selected_index = event.selection.rows[0]
+        # We use iloc on the original top_threats to get the raw data safely
         selected_row = top_threats.iloc[selected_index]
         
         # Update map focus to selected fire
