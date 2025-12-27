@@ -15,7 +15,7 @@ st.markdown("Advanced intelligence dashboard. **Tip:** Select a row in the table
 # --- 2. הגדרות API ---
 # ==========================================
 # ⚠️ שים כאן את המפתח שלך!
-MAP_KEY = "PASTE_YOUR_KEY_HERE" 
+MAP_KEY = "a987e692baea378c29f7f6967f66b1cb" 
 # ==========================================
 
 BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
