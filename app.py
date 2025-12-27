@@ -15,7 +15,7 @@ st.markdown("Advanced intelligence dashboard for monitoring global thermal anoma
 # --- 2. הגדרות API ---
 # ==========================================
 # ⚠️ שים כאן את המפתח האמיתי שלך!
-MAP_KEY = "PASTE_YOUR_KEY_HERE" 
+MAP_KEY = "a987e692baea378c29f7f6967f66b1cb" 
 # ==========================================
 
 BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
