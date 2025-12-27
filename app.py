@@ -14,6 +14,7 @@ st.markdown("Advanced intelligence dashboard for monitoring global thermal anoma
 
 # --- 2. הגדרות API ---
 # ==========================================
+# ⚠️ שים כאן את המפתח האמיתי שלך!
 MAP_KEY = "PASTE_YOUR_KEY_HERE" 
 # ==========================================
 
@@ -22,17 +23,13 @@ SOURCE = "VIIRS_SNPP_NRT"
 AREA = "world"
 DAYS = "1"
 
-# נתונים סטטיים על גודל היבשות (במיליוני קמ"ר) לטובת חישוב סטטיסטי
+# שטחי יבשות (במיליוני קמ"ר) לטובת חישוב צפיפות סיכון
 CONTINENT_AREAS = {
-    "Asia": 44.58,
-    "Africa": 30.37,
-    "North America": 24.71,
-    "South America": 17.84,
-    "Antarctica": 14.0,
-    "Europe": 10.18,
-    "Oceania": 8.52
+    "Asia": 44.58, "Africa": 30.37, "North America": 24.71,
+    "South America": 17.84, "Antarctica": 14.0, "Europe": 10.18, "Oceania": 8.52
 }
 
+# פונקציית עזר לזיהוי יבשת לפי קוד מדינה
 def get_continent_name(country_code):
     try:
         continent_code = pc.country_alpha2_to_continent_code(country_code)
@@ -64,7 +61,7 @@ def enrich_data(df):
     df['risk_factor'] = df['confidence'].map(confidence_map).fillna(1.0)
     df['threat_score'] = df['frp'] * df['risk_factor']
     
-    # 2. זיהוי מדינות ויבשות
+    # 2. זיהוי מדינות ויבשות (Reverse Geocoding)
     coordinates = list(zip(df['latitude'], df['longitude']))
     results = rg.search(coordinates)
     
@@ -73,16 +70,17 @@ def enrich_data(df):
     
     return df
 
-# טעינת ועיבוד הנתונים
+# --- תהליך הטעינה והעיבוד ---
 with st.spinner('Acquiring Satellite Data & Processing Geolocation...'):
     raw_df = load_data()
     df = enrich_data(raw_df)
 
 if not df.empty:
+    # עיבוד זמן
     df['hour'] = df['acq_time'].apply(lambda x: int(f"{x:04d}"[:2]))
     df['hour_str'] = df['hour'].apply(lambda x: f"{x:02d}:00")
     
-    # --- סרגל צד ---
+    # --- סרגל צד (Filters) ---
     st.sidebar.header("🛠️ Mission Control Filters")
     
     min_hour, max_hour = st.sidebar.slider("Operation Time (UTC)", 0, 23, (0, 23))
@@ -95,6 +93,7 @@ if not df.empty:
         default=available_continents
     )
     
+    # סינון הדאטה
     filtered_df = df[
         (df['frp'] >= min_frp) & 
         (df['hour'] >= min_hour) & 
@@ -108,10 +107,12 @@ if not df.empty:
     csv = filtered_df.to_csv(index=False).encode('utf-8')
     st.sidebar.download_button("📥 Download Intel Report", data=csv, file_name="fire_intel_report.csv", mime="text/csv")
 
-    # --- טבלה ראשית ---
+    # --- 1. טבלת איומים קריטיים ---
     st.subheader("🚨 Top 5 Critical Threats (Score = FRP × Confidence Factor)")
     
     top_threats = filtered_df.sort_values('threat_score', ascending=False).head(5)
+    
+    # עמודות להצגה (בלי מדינה, עם יבשת)
     display_cols = ['latitude', 'longitude', 'continent', 'frp', 'confidence', 'threat_score']
     
     st.dataframe(
@@ -119,22 +120,29 @@ if not df.empty:
         use_container_width=True
     )
 
-    # --- מפת חום ---
+    # --- 2. מפת חום ---
     st.subheader("🌍 Global Fire Density Heatmap")
     
     if not filtered_df.empty:
         fig_map = px.density_mapbox(
-            filtered_df, lat='latitude', lon='longitude', z='frp', radius=10,
-            center=dict(lat=20, lon=0), zoom=1, mapbox_style="carto-darkmatter", height=600
+            filtered_df, 
+            lat='latitude', 
+            lon='longitude', 
+            z='frp', 
+            radius=10,
+            center=dict(lat=20, lon=0), 
+            zoom=1,
+            mapbox_style="carto-darkmatter",
+            height=600
         )
         st.plotly_chart(fig_map, use_container_width=True)
 
-    # --- שורה חדשה של גרפים: סטטיסטיקה וסיכון ---
+    # --- 3. ניתוח סטטיסטי וסיכון ---
     st.subheader("📊 Statistical Risk Analysis")
     col1, col2 = st.columns(2)
     
     with col1:
-        # גרף 1: התפלגות כמותית (כמו קודם)
+        # גרף פאי - התפלגות כללית
         st.markdown("**Total Fire Count by Continent**")
         cont_counts = filtered_df['continent'].value_counts().reset_index()
         cont_counts.columns = ['Continent', 'Count']
@@ -142,33 +150,56 @@ if not df.empty:
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col2:
-        # גרף 2: מדד הסיכון החדש (Density Risk)
+        # גרף סיכון - שריפות למיליון קמ"ר
         st.markdown("**🔥 Risk Density: Fires per 1 Million km²**")
-        
-        # חישוב המדד החדש
         risk_data = []
         for continent in cont_counts['Continent']:
             count = cont_counts[cont_counts['Continent'] == continent]['Count'].values[0]
-            area = CONTINENT_AREAS.get(continent, 1) # ברירת מחדל כדי למנוע חלוקה באפס
+            area = CONTINENT_AREAS.get(continent, 1)
             density = count / area
             risk_data.append({'Continent': continent, 'Density': density})
         
         risk_df = pd.DataFrame(risk_data).sort_values('Density', ascending=False)
-        
-        # יצירת גרף עמודות אופקי שמדגיש את הסיכון
         fig_risk = px.bar(
-            risk_df, 
-            x='Density', 
-            y='Continent', 
-            orientation='h',
-            text_auto='.2f',
-            color='Density',
-            color_continuous_scale='Reds',
+            risk_df, x='Density', y='Continent', orientation='h', 
+            text_auto='.2f', color='Density', color_continuous_scale='Reds', 
             labels={'Density': 'Fires per Million km²'}
         )
         st.plotly_chart(fig_risk, use_container_width=True)
 
-    # --- גרף זמנים ---
+    # --- 4. הגרף החדש: רגרסיה (כמות מול איכות) ---
+    st.subheader("📈 Global Impact Analysis: Frequency vs. Intensity")
+    st.markdown("Analyzing the Top 20 Countries: Is there a correlation between **Fire Count** and **Average Intensity**?")
+    
+    if not filtered_df.empty:
+        # קיבוץ נתונים לפי מדינה
+        country_stats = filtered_df.groupby('country_code').agg(
+            Fire_Count=('frp', 'count'),
+            Avg_Intensity=('frp', 'mean'),
+            Continent=('continent', 'first')
+        ).reset_index()
+        
+        # לוקחים את ה-20 המובילות
+        top_countries_stats = country_stats.sort_values('Fire_Count', ascending=False).head(20)
+        
+        if not top_countries_stats.empty:
+            fig_reg = px.scatter(
+                top_countries_stats,
+                x="Fire_Count",
+                y="Avg_Intensity",
+                size="Fire_Count",
+                color="Continent",
+                text="country_code",
+                trendline="ols", # קו הרגרסיה
+                hover_name="country_code",
+                title="Fire Frequency vs. Severity (Top 20 Countries)",
+                labels={"Fire_Count": "Total Number of Fires", "Avg_Intensity": "Average Fire Intensity (MW)"}
+            )
+            fig_reg.update_traces(textposition='top center')
+            st.plotly_chart(fig_reg, use_container_width=True)
+            st.info("💡 **Insight:** A rising trendline indicates that countries with frequent fires also experience more intense ones.")
+
+    # --- 5. ציר זמן ---
     st.subheader("🕒 Timeline Analysis")
     if not filtered_df.empty:
         hourly_counts = filtered_df['hour_str'].value_counts().reset_index().sort_values('hour_str')
