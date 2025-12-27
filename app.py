@@ -14,7 +14,7 @@ st.markdown("Advanced intelligence dashboard for monitoring global thermal anoma
 
 # --- 2. הגדרות API ---
 # ==========================================
-MAP_KEY = "PASTE_YOUR_KEY_HERE" 
+MAP_KEY = "a987e692baea378c29f7f6967f66b1cb" 
 # ==========================================
 
 BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
@@ -22,15 +22,10 @@ SOURCE = "VIIRS_SNPP_NRT"
 AREA = "world"
 DAYS = "1"
 
-# נתונים סטטיים על גודל היבשות (במיליוני קמ"ר) לטובת חישוב סטטיסטי
+# שטחי יבשות (במיליוני קמ"ר)
 CONTINENT_AREAS = {
-    "Asia": 44.58,
-    "Africa": 30.37,
-    "North America": 24.71,
-    "South America": 17.84,
-    "Antarctica": 14.0,
-    "Europe": 10.18,
-    "Oceania": 8.52
+    "Asia": 44.58, "Africa": 30.37, "North America": 24.71,
+    "South America": 17.84, "Antarctica": 14.0, "Europe": 10.18, "Oceania": 8.52
 }
 
 def get_continent_name(country_code):
@@ -59,12 +54,10 @@ def load_data():
 def enrich_data(df):
     if df.empty: return df
     
-    # 1. חישוב Threat Score
     confidence_map = {'l': 1.0, 'n': 1.2, 'h': 1.5}
     df['risk_factor'] = df['confidence'].map(confidence_map).fillna(1.0)
     df['threat_score'] = df['frp'] * df['risk_factor']
     
-    # 2. זיהוי מדינות ויבשות
     coordinates = list(zip(df['latitude'], df['longitude']))
     results = rg.search(coordinates)
     
@@ -73,7 +66,6 @@ def enrich_data(df):
     
     return df
 
-# טעינת ועיבוד הנתונים
 with st.spinner('Acquiring Satellite Data & Processing Geolocation...'):
     raw_df = load_data()
     df = enrich_data(raw_df)
@@ -84,44 +76,30 @@ if not df.empty:
     
     # --- סרגל צד ---
     st.sidebar.header("🛠️ Mission Control Filters")
-    
     min_hour, max_hour = st.sidebar.slider("Operation Time (UTC)", 0, 23, (0, 23))
     min_frp = st.sidebar.slider("Min Intensity (MW)", 0.0, float(df['frp'].max()), 0.0)
     
     available_continents = sorted(df['continent'].unique())
-    selected_continents = st.sidebar.multiselect(
-        "Select Continents", 
-        available_continents, 
-        default=available_continents
-    )
+    selected_continents = st.sidebar.multiselect("Select Continents", available_continents, default=available_continents)
     
     filtered_df = df[
-        (df['frp'] >= min_frp) & 
-        (df['hour'] >= min_hour) & 
-        (df['hour'] <= max_hour) &
-        (df['continent'].isin(selected_continents))
+        (df['frp'] >= min_frp) & (df['hour'] >= min_hour) & 
+        (df['hour'] <= max_hour) & (df['continent'].isin(selected_continents))
     ]
     
     st.sidebar.markdown("---")
     st.sidebar.write(f"Targets Identified: **{len(filtered_df)}**")
-    
     csv = filtered_df.to_csv(index=False).encode('utf-8')
     st.sidebar.download_button("📥 Download Intel Report", data=csv, file_name="fire_intel_report.csv", mime="text/csv")
 
-    # --- טבלה ראשית ---
-    st.subheader("🚨 Top 5 Critical Threats (Score = FRP × Confidence Factor)")
-    
+    # --- טבלה ---
+    st.subheader("🚨 Top 5 Critical Threats")
     top_threats = filtered_df.sort_values('threat_score', ascending=False).head(5)
     display_cols = ['latitude', 'longitude', 'continent', 'frp', 'confidence', 'threat_score']
-    
-    st.dataframe(
-        top_threats[display_cols].style.background_gradient(subset=['threat_score'], cmap='Reds'),
-        use_container_width=True
-    )
+    st.dataframe(top_threats[display_cols].style.background_gradient(subset=['threat_score'], cmap='Reds'), use_container_width=True)
 
-    # --- מפת חום ---
+    # --- מפה ---
     st.subheader("🌍 Global Fire Density Heatmap")
-    
     if not filtered_df.empty:
         fig_map = px.density_mapbox(
             filtered_df, lat='latitude', lon='longitude', z='frp', radius=10,
@@ -129,52 +107,48 @@ if not df.empty:
         )
         st.plotly_chart(fig_map, use_container_width=True)
 
-    # --- שורה חדשה של גרפים: סטטיסטיקה וסיכון ---
+    # --- סטטיסטיקה וסיכון ---
     st.subheader("📊 Statistical Risk Analysis")
     col1, col2 = st.columns(2)
-    
     with col1:
-        # גרף 1: התפלגות כמותית (כמו קודם)
-        st.markdown("**Total Fire Count by Continent**")
         cont_counts = filtered_df['continent'].value_counts().reset_index()
         cont_counts.columns = ['Continent', 'Count']
         fig_pie = px.pie(cont_counts, values='Count', names='Continent', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col2:
-        # גרף 2: מדד הסיכון החדש (Density Risk)
-        st.markdown("**🔥 Risk Density: Fires per 1 Million km²**")
-        
-        # חישוב המדד החדש
         risk_data = []
         for continent in cont_counts['Continent']:
             count = cont_counts[cont_counts['Continent'] == continent]['Count'].values[0]
-            area = CONTINENT_AREAS.get(continent, 1) # ברירת מחדל כדי למנוע חלוקה באפס
+            area = CONTINENT_AREAS.get(continent, 1)
             density = count / area
             risk_data.append({'Continent': continent, 'Density': density})
         
         risk_df = pd.DataFrame(risk_data).sort_values('Density', ascending=False)
-        
-        # יצירת גרף עמודות אופקי שמדגיש את הסיכון
-        fig_risk = px.bar(
-            risk_df, 
-            x='Density', 
-            y='Continent', 
-            orientation='h',
-            text_auto='.2f',
-            color='Density',
-            color_continuous_scale='Reds',
-            labels={'Density': 'Fires per Million km²'}
-        )
+        fig_risk = px.bar(risk_df, x='Density', y='Continent', orientation='h', text_auto='.2f', color='Density', color_continuous_scale='Reds', labels={'Density': 'Fires per Million km²'})
         st.plotly_chart(fig_risk, use_container_width=True)
 
-    # --- גרף זמנים ---
-    st.subheader("🕒 Timeline Analysis")
+    # --- החלק החדש: רגרסיה ---
+    st.subheader("🔥 Fire Physics: Temperature vs. Intensity Regression")
+    st.markdown("Analyzing the correlation between **Brightness Temperature (Kelvin)** and **Fire Radiative Power (MW)**.")
+    
     if not filtered_df.empty:
-        hourly_counts = filtered_df['hour_str'].value_counts().reset_index().sort_values('hour_str')
-        hourly_counts.columns = ['Hour', 'Count']
-        fig_bar = px.bar(hourly_counts, x='Hour', y='Count', color='Count', color_continuous_scale='Oranges')
-        st.plotly_chart(fig_bar, use_container_width=True)
+        # יצירת גרף עם קו מגמה (OLS Regression)
+        # זה דורש את statsmodels שהוספנו ל-requirements
+        fig_reg = px.scatter(
+            filtered_df, 
+            x="bright_ti4", 
+            y="frp", 
+            color="continent", # צביעה לפי יבשות מוסיפה עניין
+            trendline="ols", # כאן הקסם: הוספת קו הרגרסיה
+            labels={
+                "bright_ti4": "Brightness Temperature (Kelvin)",
+                "frp": "Fire Radiative Power (MW)"
+            },
+            title="Does higher temperature mean more intense fire?",
+            opacity=0.6
+        )
+        st.plotly_chart(fig_reg, use_container_width=True)
 
 else:
     st.error("System Offline: Check API Key or Data Connection.")
