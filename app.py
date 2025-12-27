@@ -10,11 +10,11 @@ import pycountry_convert as pc
 st.set_page_config(page_title="Yuval Fire Analytics", layout="wide", page_icon="🔥")
 
 st.title("🔥 Yuval ft. Nasa Fire Analysis")
-st.markdown("Advanced intelligence dashboard for monitoring global thermal anomalies.")
+st.markdown("Advanced intelligence dashboard. **Tip:** Select a row in the table below to zoom into that location on the map.")
 
 # --- 2. הגדרות API ---
 # ==========================================
-# ⚠️ אל תשכח לשים את המפתח שלך כאן!
+# ⚠️ שים כאן את המפתח שלך!
 MAP_KEY = "PASTE_YOUR_KEY_HERE" 
 # ==========================================
 
@@ -55,12 +55,10 @@ def load_data():
 def enrich_data(df):
     if df.empty: return df
     
-    # 1. חישוב Threat Score
     confidence_map = {'l': 1.0, 'n': 1.2, 'h': 1.5}
     df['risk_factor'] = df['confidence'].map(confidence_map).fillna(1.0)
     df['threat_score'] = df['frp'] * df['risk_factor']
     
-    # 2. זיהוי מדינות ויבשות
     coordinates = list(zip(df['latitude'], df['longitude']))
     results = rg.search(coordinates)
     
@@ -69,8 +67,8 @@ def enrich_data(df):
     
     return df
 
-# --- ביצוע ---
-with st.spinner('Acquiring Satellite Data & Processing Geolocation...'):
+# --- טעינת נתונים ---
+with st.spinner('Acquiring Satellite Data...'):
     raw_df = load_data()
     df = enrich_data(raw_df)
 
@@ -96,24 +94,58 @@ if not df.empty:
     csv = filtered_df.to_csv(index=False).encode('utf-8')
     st.sidebar.download_button("📥 Download Intel Report", data=csv, file_name="fire_intel_report.csv", mime="text/csv")
 
-    # --- 1. טבלה ---
-    st.subheader("🚨 Top 5 Critical Threats (Score = FRP × Confidence Factor)")
+    # --- 1. הטבלה האינטראקטיבית (הפיצ'ר החדש!) ---
+    st.subheader("🚨 Top 5 Critical Threats (Select a row to Zoom)")
+    
     top_threats = filtered_df.sort_values('threat_score', ascending=False).head(5)
-    display_cols = ['latitude', 'longitude', 'continent', 'frp', 'confidence', 'threat_score']
-    st.dataframe(top_threats[display_cols].style.background_gradient(subset=['threat_score'], cmap='Reds'), use_container_width=True)
+    
+    # הגדרת הטבלה עם אפשרות בחירה
+    event = st.dataframe(
+        top_threats[['latitude', 'longitude', 'continent', 'frp', 'confidence', 'threat_score']].style.background_gradient(subset=['threat_score'], cmap='Reds'),
+        use_container_width=True,
+        on_select="rerun",     # גורם לאפליקציה להתעדכן בלחיצה
+        selection_mode="single-row" # מאפשר לבחור רק שורה אחת בכל פעם
+    )
 
-    # --- 2. מפה ---
+    # --- לוגיקה לזום במפה ---
+    # ברירת מחדל: מבט גלובלי
+    map_center = dict(lat=20, lon=0)
+    map_zoom = 1
+
+    # בדיקה אם המשתמש בחר שורה בטבלה
+    if len(event.selection.rows) > 0:
+        selected_index = event.selection.rows[0]
+        # שליפת הנתונים של השורה שנבחרה
+        selected_row = top_threats.iloc[selected_index]
+        
+        # עדכון מרכז המפה והזום
+        map_center = dict(lat=selected_row['latitude'], lon=selected_row['longitude'])
+        map_zoom = 5 # זום פנימה
+        
+        # הודעה למשתמש
+        st.success(f"📍 Focusing on high-threat target in {selected_row['continent']} (Intensity: {selected_row['frp']} MW)")
+
+    # --- 2. מפת החום (מגיבה לזום) ---
     st.subheader("🌍 Global Fire Density Heatmap")
+    
     if not filtered_df.empty:
         fig_map = px.density_mapbox(
-            filtered_df, lat='latitude', lon='longitude', z='frp', radius=10,
-            center=dict(lat=20, lon=0), zoom=1, mapbox_style="carto-darkmatter", height=600
+            filtered_df, 
+            lat='latitude', 
+            lon='longitude', 
+            z='frp', 
+            radius=10,
+            center=map_center, # כאן נכנס הקואורדינטה (או הגלובלית או של השריפה שנבחרה)
+            zoom=map_zoom,     # כאן נכנס הזום
+            mapbox_style="carto-darkmatter",
+            height=600
         )
         st.plotly_chart(fig_map, use_container_width=True)
 
-    # --- 3. סטטיסטיקה וסיכון ---
+    # --- 3. גרפים סטטיסטיים (חזרנו לגרסה הטובה) ---
     st.subheader("📊 Statistical Risk Analysis")
     col1, col2 = st.columns(2)
+    
     with col1:
         st.markdown("**Total Fire Count by Continent**")
         cont_counts = filtered_df['continent'].value_counts().reset_index()
@@ -134,27 +166,7 @@ if not df.empty:
         fig_risk = px.bar(risk_df, x='Density', y='Continent', orientation='h', text_auto='.2f', color='Density', color_continuous_scale='Reds', labels={'Density': 'Fires per Million km²'})
         st.plotly_chart(fig_risk, use_container_width=True)
 
-    # --- 4. הגרף החדש: Box Plot (התפלגות עוצמה) ---
-    st.subheader("📈 Intensity Distribution by Continent")
-    st.markdown("Comparing the **range of fire intensities**. This reveals which regions experience the most extreme wildfire events.")
-    
-    if not filtered_df.empty:
-        # יצירת Box Plot
-        # זה מראה את החציון, הרבעונים, ואת נקודות הקיצון (השריפות החזקות באמת)
-        fig_box = px.box(
-            filtered_df,
-            x="continent",
-            y="frp",
-            color="continent",
-            points="outliers", # מציג רק את החריגים כנקודות, שאר המידע בתוך הקופסה
-            title="Where are the most intense fires?",
-            labels={"frp": "Fire Intensity (MW)", "continent": "Continent"},
-            color_discrete_sequence=px.colors.qualitative.Bold
-        )
-        st.plotly_chart(fig_box, use_container_width=True)
-        st.info("💡 **How to read:** The box shows the average fire. The dots above the box are 'Extreme Events' (Outliers).")
-
-    # --- 5. ציר זמן ---
+    # --- 4. ציר זמן ---
     st.subheader("🕒 Timeline Analysis")
     if not filtered_df.empty:
         hourly_counts = filtered_df['hour_str'].value_counts().reset_index().sort_values('hour_str')
