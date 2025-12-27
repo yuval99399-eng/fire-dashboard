@@ -5,3 +5,4 @@ requests
 reverse_geocoder
 matplotlib
 pycountry-convert
+statsmodels
